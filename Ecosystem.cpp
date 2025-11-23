@@ -357,58 +357,85 @@ int main() {
             int idx = winner[d];
             if (idx == -1) continue;
 
+            // Si el destino tenía un conejo, el zorro se lo come (el conejo desaparece)
+            if (world_next[d].type == RABBIT) {
+                world_next[d].type = EMPTY;
+            }
+
             world_next[d].type = FOX;
             world_next[d].repro = age0_f[idx];
             world_next[d].hunger = hunger1[idx];
         }
 
+
         // Zorros que se quedan en su sitio
         for (int idx = 0; idx < size; ++idx) {
             if (world_after_r[idx].type != FOX) continue;
             if (!aliveEnd_f[idx]) continue;
-            if (move_f[idx]) continue; // los que se intentaron mover ya están considerados
+            if (move_f[idx]) continue; // los que se movieron ya se gestionaron como ganadores o muertos
 
             if (world_next[idx].type == EMPTY) {
                 world_next[idx].type = FOX;
-                world_next[idx].repro = age0_f[idx];
+                world_next[idx].repro = age0_f[idx];   // se ajustará luego
                 world_next[idx].hunger = hunger1[idx];
             }
         }
 
-        // Nacimientos de zorros
+        // Calculamos edades finales de reproducción de zorros
+        vector<int> next_age_f(size, 0);
+
+        // Padres en su posición final
         for (int idx = 0; idx < size; ++idx) {
             if (world_after_r[idx].type != FOX) continue;
             if (!aliveEnd_f[idx]) continue;
-            if (!move_f[idx]) continue;
-            if (!canRepro_f[idx]) continue;
+
+            bool moved = move_f[idx];
+            int pos;
+
+            if (moved) {
+                int d = dest_f[idx];
+                // Si no ganó el conflicto, este zorro no existe al final
+                if (winner[d] != idx) continue;
+                pos = d;
+            } else {
+                pos = idx;
+            }
+
+            if (world_next[pos].type != FOX) continue;
+
+            bool reproduced = false;
+            if (moved && canRepro_f[idx] && winner[dest_f[idx]] == idx) {
+                reproduced = true;
+            }
+
+            if (reproduced) {
+                next_age_f[pos] = 0;
+            } else {
+                next_age_f[pos] = age0_f[idx] + 1;
+            }
+        }
+
+        // Nacimientos de zorros (solo si el zorro se movió, tenía edad y ganó su destino)
+        for (int idx = 0; idx < size; ++idx) {
+            if (world_after_r[idx].type != FOX) continue;
+            if (!aliveEnd_f[idx]) continue;       // murió de hambre
+            if (!move_f[idx]) continue;           // no se movió
+            if (!canRepro_f[idx]) continue;       // no alcanzó edad
+            if (winner[dest_f[idx]] != idx) continue; // perdió conflicto
+
 
             if (world_next[idx].type == EMPTY) {
                 world_next[idx].type = FOX;
-                world_next[idx].repro = 0;
+                world_next[idx].repro = 0; // se fijará ahora a 0 igual
                 world_next[idx].hunger = 0;
             }
+            next_age_f[idx] = 0;
         }
 
-        // Actualización de edades de reproducción de zorros
+        // Aplicamos las edades finales de los zorros
         for (int i = 0; i < size; ++i) {
             if (world_next[i].type == FOX) {
-                world_next[i].repro += 1;
-            }
-        }
-
-        for (int idx = 0; idx < size; ++idx) {
-            if (world_after_r[idx].type != FOX) continue;
-            if (!aliveEnd_f[idx]) continue;
-            if (!move_f[idx]) continue;
-            if (!canRepro_f[idx]) continue;
-
-            int d = dest_f[idx];
-
-            if (world_next[d].type == FOX) {
-                world_next[d].repro = 0;
-            }
-            if (idx != d && world_next[idx].type == FOX) {
-                world_next[idx].repro = 0;
+                world_next[i].repro = next_age_f[i];
             }
         }
 
