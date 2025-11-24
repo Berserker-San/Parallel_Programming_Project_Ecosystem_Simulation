@@ -1,476 +1,461 @@
-#include <bits/stdc++.h>
+#include <iostream>
+#include <vector>
+#include <string>
 #include <omp.h>
 
 using namespace std;
 
-// Tipos de objeto en la celda
-enum { EMPTY = 0, ROCK = 1, RABBIT = 2, FOX = 3 };
-
-struct Cell {
-    int type;      // EMPTY, ROCK, RABBIT, FOX
-    int repro;     // contador de generaciones para reproducción
-    int hunger;    // contador de hambre (solo zorros)
+enum
+{
+    EMPTY = 0,
+    ROCK = 1,
+    RABBIT = 2,
+    FOX = 3
 };
 
-int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
+int genProcRabbits, genProcFoxes, genFoodFoxes;
+int nGen, R, C, N;
+int gridSize;
 
-    int GEN_PROC_RABBITS, GEN_PROC_FOXES, GEN_FOOD_FOXES;
-    int N_GEN, R, C, N;
+// mundo actual
+vector<int> tipo, repro, hambre;
+// después de conejos
+vector<int> tipoR, reproR, hambreR;
+// después de zorros
+vector<int> tipoNext, reproNext, hambreNext;
 
-    // Leemos la línea de configuración
-    if (!(cin >> GEN_PROC_RABBITS >> GEN_PROC_FOXES >> GEN_FOOD_FOXES
-              >> N_GEN >> R >> C >> N)) {
-        return 0;
+// auxiliares conejos
+vector<char> moveR, canReproR, aliveR;
+vector<int> destR, age0R, nextAgeR;
+// auxiliares zorros
+vector<char> moveF, canReproF, aliveF;
+vector<int> destF, age0F, hungry0, hunger1, nextAgeF;
+// conflictos
+vector<int> bestAge, bestHunger, winner;
+
+const int dx[4] = {-1, 0, 1, 0};
+const int dy[4] = {0, 1, 0, -1};
+
+int idxPos(int x, int y) { return x * C + y; }
+
+void leerEntrada()
+{
+    if (!(cin >> genProcRabbits >> genProcFoxes >> genFoodFoxes >> nGen >> R >> C >> N))
+    {
+        exit(0);
     }
+    gridSize = R * C;
 
-    int size = R * C;
-    vector<Cell> world(size);         // mundo actual
-    vector<Cell> world_after_r(size); // mundo después de mover conejos
-    vector<Cell> world_next(size);    // mundo después de mover zorros
+    tipo.assign(gridSize, EMPTY);
+    repro.assign(gridSize, 0);
+    hambre.assign(gridSize, 0);
 
-    // Inicializamos todas las celdas como vacías
-    for (int i = 0; i < size; ++i) {
-        world[i].type = EMPTY;
-        world[i].repro = 0;
-        world[i].hunger = 0;
-    }
-
-    // Leemos objetos iniciales
-    for (int i = 0; i < N; ++i) {
+    for (int i = 0; i < N; ++i)
+    {
         string obj;
         int x, y;
         cin >> obj >> x >> y;
-        int idx = x * C + y;
-        if (obj == "ROCK") {
-            world[idx].type = ROCK;
-        } else if (obj == "RABBIT") {
-            world[idx].type = RABBIT;
-        } else if (obj == "FOX") {
-            world[idx].type = FOX;
+        int id = idxPos(x, y);
+        if (obj == "ROCK")
+            tipo[id] = ROCK;
+        if (obj == "RABBIT")
+            tipo[id] = RABBIT;
+        if (obj == "FOX")
+            tipo[id] = FOX;
+    }
+
+    tipoR.resize(gridSize);
+    reproR.resize(gridSize);
+    hambreR.resize(gridSize);
+
+    tipoNext.resize(gridSize);
+    reproNext.resize(gridSize);
+    hambreNext.resize(gridSize);
+
+    moveR.assign(gridSize, 0);
+    canReproR.assign(gridSize, 0);
+    aliveR.assign(gridSize, 0);
+    destR.assign(gridSize, -1);
+    age0R.assign(gridSize, 0);
+    nextAgeR.assign(gridSize, 0);
+
+    moveF.assign(gridSize, 0);
+    canReproF.assign(gridSize, 0);
+    aliveF.assign(gridSize, 0);
+    destF.assign(gridSize, -1);
+    age0F.assign(gridSize, 0);
+    hungry0.assign(gridSize, 0);
+    hunger1.assign(gridSize, 0);
+    nextAgeF.assign(gridSize, 0);
+
+    bestAge.assign(gridSize, -1);
+    bestHunger.assign(gridSize, 0);
+    winner.assign(gridSize, -1);
+}
+
+void faseConejos(int gen)
+{
+#pragma omp parallel for
+    for (int i = 0; i < gridSize; ++i)
+    {
+        moveR[i] = 0;
+        canReproR[i] = 0;
+        aliveR[i] = 0;
+        destR[i] = -1;
+        age0R[i] = 0;
+        tipoR[i] = EMPTY;
+        reproR[i] = 0;
+        hambreR[i] = 0;
+    }
+
+#pragma omp parallel for
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipo[id] != RABBIT)
+            continue;
+        int x = id / C, y = id % C;
+
+        age0R[id] = repro[id];
+        canReproR[id] = (age0R[id] >= genProcRabbits);
+
+        int cand[4], pc = 0;
+        for (int d = 0; d < 4; ++d)
+        {
+            int nx = x + dx[d], ny = y + dy[d];
+            if (nx < 0 || nx >= R || ny < 0 || ny >= C)
+                continue;
+            int nid = idxPos(nx, ny);
+            if (tipo[nid] == EMPTY)
+                cand[pc++] = nid;
+        }
+        if (pc > 0)
+        {
+            int ch = (gen + x + y) % pc;
+            destR[id] = cand[ch];
+            moveR[id] = 1;
         }
     }
 
-    // Desplazamientos N, E, S, O
-    const int dx[4] = { -1, 0, 1, 0 };
-    const int dy[4] = { 0, 1, 0, -1 };
-
-    // Arrays auxiliares para conejos
-    vector<char> move_r(size);        // si el conejo intenta moverse
-    vector<int>  dest_r(size);        // destino (índice en el vector)
-    vector<char> canRepro_r(size);    // si puede reproducirse
-    vector<char> aliveEnd_r(size);    // si el conejo sigue vivo al final de su fase
-    vector<int>  age0_r(size);        // edad de reproducción al inicio de la generación
-
-    // Arrays auxiliares para zorros
-    vector<char> move_f(size);
-    vector<int>  dest_f(size);
-    vector<char> canRepro_f(size);
-    vector<char> aliveEnd_f(size);
-    vector<int>  age0_f(size);
-    vector<int>  hungry0(size);
-    vector<int>  hunger1(size);       // hambre tras la decisión de esta generación
-
-    // Arrays para resolución de conflictos
-    vector<int> best_age(size);       // para conejos y zorros según la fase
-    vector<int> best_hunger(size);    // solo zorros
-    vector<int> winner(size);         // índice del origen ganador
-
-    // Bucle principal de generaciones
-    for (int gen = 0; gen < N_GEN; ++gen) {
-
-        // ========================
-        // FASE DE CONEJOS
-        // ========================
-
-        // Reseteo de arrays auxiliares de conejos
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            move_r[i] = 0;
-            dest_r[i] = -1;
-            canRepro_r[i] = 0;
-            aliveEnd_r[i] = 0;
-            age0_r[i] = 0;
+#pragma omp parallel for
+    for (int i = 0; i < gridSize; ++i)
+    {
+        if (tipo[i] == ROCK || tipo[i] == FOX)
+        {
+            tipoR[i] = tipo[i];
+            reproR[i] = repro[i];
+            hambreR[i] = hambre[i];
         }
-
-        // Decisiones de movimiento de conejos
-        #pragma omp parallel for
-        for (int idx = 0; idx < size; ++idx) {
-            if (world[idx].type != RABBIT) continue;
-
-            int x = idx / C;
-            int y = idx % C;
-
-            age0_r[idx] = world[idx].repro;
-            canRepro_r[idx] = (age0_r[idx] >= GEN_PROC_RABBITS);
-
-            // Buscar celdas vacías adyacentes en el mundo actual
-            int cand[4];
-            int pc = 0;
-            for (int d = 0; d < 4; ++d) {
-                int nx = x + dx[d];
-                int ny = y + dy[d];
-                if (nx >= 0 && nx < R && ny >= 0 && ny < C) {
-                    int nidx = nx * C + ny;
-                    if (world[nidx].type == EMPTY) {
-                        cand[pc++] = nidx;
-                    }
-                }
-            }
-
-            if (pc > 0) {
-                int choice = (gen + x + y) % pc;
-                dest_r[idx] = cand[choice];
-                move_r[idx] = 1;
-            } else {
-                move_r[idx] = 0;
-            }
-        }
-
-        // world_after_r: copiamos rocas y zorros del mundo actual
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            world_after_r[i].type = EMPTY;
-            world_after_r[i].repro = 0;
-            world_after_r[i].hunger = 0;
-
-            if (world[i].type == ROCK || world[i].type == FOX) {
-                world_after_r[i] = world[i];
-            }
-        }
-
-        // Resolución de conflictos de conejos en el destino
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            best_age[i] = -1;
-            winner[i] = -1;
-        }
-
-        for (int idx = 0; idx < size; ++idx) {
-            if (world[idx].type != RABBIT || !move_r[idx]) continue;
-            int d = dest_r[idx];
-            int a = age0_r[idx];
-
-            if (best_age[d] == -1 || a > best_age[d]) {
-                if (best_age[d] != -1) {
-                    int prev = winner[d];
-                    if (prev >= 0) aliveEnd_r[prev] = 0;
-                }
-                best_age[d] = a;
-                winner[d] = idx;
-                aliveEnd_r[idx] = 1;
-
-                world_after_r[d].type = RABBIT;
-                world_after_r[d].repro = age0_r[idx];
-                world_after_r[d].hunger = 0;
-            }
-        }
-
-        // Conejos que se quedan en su sitio
-        for (int idx = 0; idx < size; ++idx) {
-            if (world[idx].type != RABBIT) continue;
-
-            if (!move_r[idx]) {
-                aliveEnd_r[idx] = 1;
-                if (world_after_r[idx].type == EMPTY) {
-                    world_after_r[idx].type = RABBIT;
-                    world_after_r[idx].repro = age0_r[idx];
-                    world_after_r[idx].hunger = 0;
-                }
-            }
-        }
-
-        // Nacimientos de conejos (padre se movió y podía reproducirse)
-        for (int idx = 0; idx < size; ++idx) {
-            if (world[idx].type != RABBIT) continue;
-            if (!move_r[idx]) continue;
-            if (!aliveEnd_r[idx]) continue;
-            if (!canRepro_r[idx]) continue;
-
-            if (world_after_r[idx].type == EMPTY) {
-                world_after_r[idx].type = RABBIT;
-                world_after_r[idx].repro = 0;
-                world_after_r[idx].hunger = 0;
-            }
-        }
-
-        // Actualización de edades de reproducción de conejos
-        vector<int> next_age_r(size, 0);
-
-        // Padres
-        for (int idx = 0; idx < size; ++idx) {
-            if (world[idx].type != RABBIT) continue;
-            if (!aliveEnd_r[idx]) continue;
-
-            int pos = move_r[idx] ? dest_r[idx] : idx;
-            if (canRepro_r[idx]) {
-                next_age_r[pos] = 0;
-            } else {
-                next_age_r[pos] = age0_r[idx] + 1;
-            }
-        }
-
-        // Hijos
-        for (int idx = 0; idx < size; ++idx) {
-            if (world[idx].type != RABBIT) continue;
-            if (!move_r[idx]) continue;
-            if (!aliveEnd_r[idx]) continue;
-            if (!canRepro_r[idx]) continue;
-
-            next_age_r[idx] = 0;
-        }
-
-        for (int i = 0; i < size; ++i) {
-            if (world_after_r[i].type == RABBIT) {
-                world_after_r[i].repro = next_age_r[i];
-            }
-        }
-
-        // ========================
-        // FASE DE ZORROS
-        // ========================
-
-        // Reseteo de arrays auxiliares de zorros
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            move_f[i]      = 0;
-            dest_f[i]      = -1;
-            canRepro_f[i]  = 0;
-            aliveEnd_f[i]  = 0;
-            age0_f[i]      = 0;
-            hungry0[i]     = 0;
-            hunger1[i]     = 0;
-        }
-
-        // world_next: copiamos rocas y conejos del mundo después de conejos
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            world_next[i].type = EMPTY;
-            world_next[i].repro = 0;
-            world_next[i].hunger = 0;
-
-            if (world_after_r[i].type == ROCK || world_after_r[i].type == RABBIT) {
-                world_next[i] = world_after_r[i];
-            }
-        }
-
-        // Decisiones de movimiento de zorros
-        for (int idx = 0; idx < size; ++idx) {
-            if (world_after_r[idx].type != FOX) continue;
-
-            int x = idx / C;
-            int y = idx % C;
-
-            age0_f[idx] = world_after_r[idx].repro;
-            hungry0[idx] = world_after_r[idx].hunger;
-            canRepro_f[idx] = (age0_f[idx] >= GEN_PROC_FOXES);
-
-            // Buscar conejos adyacentes
-            int cand_rab[4];
-            int pr = 0;
-            for (int d = 0; d < 4; ++d) {
-                int nx = x + dx[d];
-                int ny = y + dy[d];
-                if (nx >= 0 && nx < R && ny >= 0 && ny < C) {
-                    int nidx = nx * C + ny;
-                    if (world_after_r[nidx].type == RABBIT) {
-                        cand_rab[pr++] = nidx;
-                    }
-                }
-            }
-
-            if (pr > 0) {
-                int choice = (gen + x + y) % pr;
-                dest_f[idx] = cand_rab[choice];
-                move_f[idx] = 1;
-                aliveEnd_f[idx] = 1;
-                hunger1[idx] = 0; // comió conejo
-            } else {
-                int nh = hungry0[idx] + 1;
-                if (nh >= GEN_FOOD_FOXES) {
-                    move_f[idx] = 0;
-                    aliveEnd_f[idx] = 0; // muere de hambre
-                    hunger1[idx] = nh;
-                } else {
-                    int cand_emp[4];
-                    int pe = 0;
-                    for (int d = 0; d < 4; ++d) {
-                        int nx = x + dx[d];
-                        int ny = y + dy[d];
-                        if (nx >= 0 && nx < R && ny >= 0 && ny < C) {
-                            int nidx = nx * C + ny;
-                            if (world_after_r[nidx].type == EMPTY) {
-                                cand_emp[pe++] = nidx;
-                            }
-                        }
-                    }
-
-                    hunger1[idx] = nh;
-                    if (pe > 0) {
-                        int choice = (gen + x + y) % pe;
-                        dest_f[idx] = cand_emp[choice];
-                        move_f[idx] = 1;
-                        aliveEnd_f[idx] = 1;
-                    } else {
-                        // se queda en su sitio, sigue vivo, hambre aumentada
-                        move_f[idx] = 0;
-                        aliveEnd_f[idx] = 1;
-                    }
-                }
-            }
-        }
-
-        // Resolución de conflictos de zorros en el destino
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            best_age[i] = -1;
-            best_hunger[i] = 0;
-            winner[i] = -1;
-        }
-
-        for (int idx = 0; idx < size; ++idx) {
-            if (world_after_r[idx].type != FOX) continue;
-            if (!aliveEnd_f[idx]) continue;
-            if (!move_f[idx]) continue;
-
-            int d = dest_f[idx];
-            int a = age0_f[idx];
-            int h = hunger1[idx];
-
-            if (best_age[d] == -1) {
-                best_age[d] = a;
-                best_hunger[d] = h;
-                winner[d] = idx;
-            } else {
-                if (a > best_age[d] ||
-                    (a == best_age[d] && h < best_hunger[d])) {
-                    best_age[d] = a;
-                    best_hunger[d] = h;
-                    winner[d] = idx;
-                }
-            }
-        }
-
-        // Colocamos zorros que se movieron y ganaron el conflicto
-        for (int d = 0; d < size; ++d) {
-            int idx = winner[d];
-            if (idx == -1) continue;
-
-            // Si el destino tenía un conejo, el zorro se lo come (el conejo desaparece)
-            if (world_next[d].type == RABBIT) {
-                world_next[d].type = EMPTY;
-            }
-
-            world_next[d].type = FOX;
-            world_next[d].repro = age0_f[idx];
-            world_next[d].hunger = hunger1[idx];
-        }
-
-
-        // Zorros que se quedan en su sitio
-        for (int idx = 0; idx < size; ++idx) {
-            if (world_after_r[idx].type != FOX) continue;
-            if (!aliveEnd_f[idx]) continue;
-            if (move_f[idx]) continue; // los que se movieron ya se gestionaron como ganadores o muertos
-
-            if (world_next[idx].type == EMPTY) {
-                world_next[idx].type = FOX;
-                world_next[idx].repro = age0_f[idx];   // se ajustará luego
-                world_next[idx].hunger = hunger1[idx];
-            }
-        }
-
-        // Calculamos edades finales de reproducción de zorros
-        vector<int> next_age_f(size, 0);
-
-        // Padres en su posición final
-        for (int idx = 0; idx < size; ++idx) {
-            if (world_after_r[idx].type != FOX) continue;
-            if (!aliveEnd_f[idx]) continue;
-
-            bool moved = move_f[idx];
-            int pos;
-
-            if (moved) {
-                int d = dest_f[idx];
-                // Si no ganó el conflicto, este zorro no existe al final
-                if (winner[d] != idx) continue;
-                pos = d;
-            } else {
-                pos = idx;
-            }
-
-            if (world_next[pos].type != FOX) continue;
-
-            bool reproduced = false;
-            if (moved && canRepro_f[idx] && winner[dest_f[idx]] == idx) {
-                reproduced = true;
-            }
-
-            if (reproduced) {
-                next_age_f[pos] = 0;
-            } else {
-                next_age_f[pos] = age0_f[idx] + 1;
-            }
-        }
-
-        // Nacimientos de zorros (solo si el zorro se movió, tenía edad y ganó su destino)
-        for (int idx = 0; idx < size; ++idx) {
-            if (world_after_r[idx].type != FOX) continue;
-            if (!aliveEnd_f[idx]) continue;       // murió de hambre
-            if (!move_f[idx]) continue;           // no se movió
-            if (!canRepro_f[idx]) continue;       // no alcanzó edad
-            if (winner[dest_f[idx]] != idx) continue; // perdió conflicto
-
-
-            if (world_next[idx].type == EMPTY) {
-                world_next[idx].type = FOX;
-                world_next[idx].repro = 0; // se fijará ahora a 0 igual
-                world_next[idx].hunger = 0;
-            }
-            next_age_f[idx] = 0;
-        }
-
-        // Aplicamos las edades finales de los zorros
-        for (int i = 0; i < size; ++i) {
-            if (world_next[i].type == FOX) {
-                world_next[i].repro = next_age_f[i];
-            }
-        }
-
-        // Intercambiamos mundos: el nuevo estado pasa a ser el actual
-        world.swap(world_next);
+        bestAge[i] = -1;
+        winner[i] = -1;
     }
 
-    // Contamos objetos finales
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipo[id] != RABBIT || !moveR[id])
+            continue;
+        int d = destR[id];
+        int a = age0R[id];
+        if (bestAge[d] == -1 || a > bestAge[d])
+        {
+            int prev = winner[d];
+            if (prev >= 0)
+                aliveR[prev] = 0;
+            bestAge[d] = a;
+            winner[d] = id;
+            aliveR[id] = 1;
+            tipoR[d] = RABBIT;
+            reproR[d] = age0R[id];
+            hambreR[d] = 0;
+        }
+    }
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipo[id] != RABBIT)
+            continue;
+        if (!moveR[id])
+        {
+            aliveR[id] = 1;
+            if (tipoR[id] == EMPTY)
+            {
+                tipoR[id] = RABBIT;
+                reproR[id] = age0R[id];
+                hambreR[id] = 0;
+            }
+        }
+    }
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipo[id] != RABBIT)
+            continue;
+        if (!moveR[id] || !aliveR[id] || !canReproR[id])
+            continue;
+        if (tipoR[id] == EMPTY)
+        {
+            tipoR[id] = RABBIT;
+            reproR[id] = 0;
+            hambreR[id] = 0;
+        }
+    }
+
+    nextAgeR.assign(gridSize, 0);
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipo[id] != RABBIT || !aliveR[id])
+            continue;
+        int pos = moveR[id] ? destR[id] : id;
+        nextAgeR[pos] = canReproR[id] ? 0 : age0R[id] + 1;
+    }
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipo[id] != RABBIT || !moveR[id] || !aliveR[id] || !canReproR[id])
+            continue;
+        nextAgeR[id] = 0;
+    }
+
+    for (int i = 0; i < gridSize; ++i)
+    {
+        if (tipoR[i] == RABBIT)
+            reproR[i] = nextAgeR[i];
+    }
+}
+
+void faseZorros(int gen)
+{
+#pragma omp parallel for
+    for (int i = 0; i < gridSize; ++i)
+    {
+        moveF[i] = 0;
+        canReproF[i] = 0;
+        aliveF[i] = 0;
+        destF[i] = -1;
+        age0F[i] = 0;
+        hungry0[i] = 0;
+        hunger1[i] = 0;
+        tipoNext[i] = EMPTY;
+        reproNext[i] = 0;
+        hambreNext[i] = 0;
+    }
+
+#pragma omp parallel for
+    for (int i = 0; i < gridSize; ++i)
+    {
+        if (tipoR[i] == ROCK || tipoR[i] == RABBIT)
+        {
+            tipoNext[i] = tipoR[i];
+            reproNext[i] = reproR[i];
+            hambreNext[i] = hambreR[i];
+        }
+    }
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipoR[id] != FOX)
+            continue;
+        int x = id / C, y = id % C;
+
+        age0F[id] = reproR[id];
+        hungry0[id] = hambreR[id];
+        canReproF[id] = (age0F[id] >= genProcFoxes);
+
+        int candRab[4], pr = 0;
+        for (int d = 0; d < 4; ++d)
+        {
+            int nx = x + dx[d], ny = y + dy[d];
+            if (nx < 0 || nx >= R || ny < 0 || ny >= C)
+                continue;
+            int nid = idxPos(nx, ny);
+            if (tipoR[nid] == RABBIT)
+                candRab[pr++] = nid;
+        }
+
+        if (pr > 0)
+        {
+            int ch = (gen + x + y) % pr;
+            destF[id] = candRab[ch];
+            moveF[id] = 1;
+            aliveF[id] = 1;
+            hunger1[id] = 0;
+        }
+        else
+        {
+            int nh = hungry0[id] + 1;
+            if (nh >= genFoodFoxes)
+            {
+                aliveF[id] = 0;
+                hunger1[id] = nh;
+            }
+            else
+            {
+                int candEmp[4], pe = 0;
+                for (int d = 0; d < 4; ++d)
+                {
+                    int nx = x + dx[d], ny = y + dy[d];
+                    if (nx < 0 || nx >= R || ny < 0 || ny >= C)
+                        continue;
+                    int nid = idxPos(nx, ny);
+                    if (tipoR[nid] == EMPTY)
+                        candEmp[pe++] = nid;
+                }
+                hunger1[id] = nh;
+                if (pe > 0)
+                {
+                    int ch = (gen + x + y) % pe;
+                    destF[id] = candEmp[ch];
+                    moveF[id] = 1;
+                    aliveF[id] = 1;
+                }
+                else
+                {
+                    aliveF[id] = 1;
+                }
+            }
+        }
+    }
+
+#pragma omp parallel for
+    for (int i = 0; i < gridSize; ++i)
+    {
+        bestAge[i] = -1;
+        bestHunger[i] = 0;
+        winner[i] = -1;
+    }
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipoR[id] != FOX || !aliveF[id] || !moveF[id])
+            continue;
+        int d = destF[id];
+        int a = age0F[id];
+        int h = hunger1[id];
+        if (bestAge[d] == -1 ||
+            a > bestAge[d] ||
+            (a == bestAge[d] && h < bestHunger[d]))
+        {
+            bestAge[d] = a;
+            bestHunger[d] = h;
+            winner[d] = id;
+        }
+    }
+
+    for (int d = 0; d < gridSize; ++d)
+    {
+        int id = winner[d];
+        if (id == -1)
+            continue;
+        tipoNext[d] = FOX;
+        reproNext[d] = age0F[id];
+        hambreNext[d] = hunger1[id];
+    }
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipoR[id] != FOX || !aliveF[id] || moveF[id])
+            continue;
+        if (tipoNext[id] == EMPTY)
+        {
+            tipoNext[id] = FOX;
+            reproNext[id] = age0F[id];
+            hambreNext[id] = hunger1[id];
+        }
+    }
+
+    nextAgeF.assign(gridSize, 0);
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipoR[id] != FOX || !aliveF[id])
+            continue;
+        int pos;
+        if (moveF[id])
+        {
+            int d = destF[id];
+            if (winner[d] != id)
+                continue;
+            pos = d;
+        }
+        else
+        {
+            pos = id;
+        }
+        if (tipoNext[pos] != FOX)
+            continue;
+        bool reproduced = moveF[id] && canReproF[id] && winner[destF[id]] == id;
+        nextAgeF[pos] = reproduced ? 0 : age0F[id] + 1;
+    }
+
+    for (int id = 0; id < gridSize; ++id)
+    {
+        if (tipoR[id] != FOX || !aliveF[id] || !moveF[id])
+            continue;
+        if (!canReproF[id])
+            continue;
+        if (winner[destF[id]] != id)
+            continue;
+        if (tipoNext[id] == EMPTY)
+        {
+            tipoNext[id] = FOX;
+            reproNext[id] = 0;
+            hambreNext[id] = 0;
+        }
+        nextAgeF[id] = 0;
+    }
+
+    for (int i = 0; i < gridSize; ++i)
+    {
+        if (tipoNext[i] == FOX)
+            reproNext[i] = nextAgeF[i];
+    }
+}
+
+void imprimirResultado()
+{
     int finalN = 0;
-    for (int i = 0; i < size; ++i) {
-        if (world[i].type != EMPTY) ++finalN;
-    }
+    for (int i = 0; i < gridSize; ++i)
+        if (tipo[i] != EMPTY)
+            ++finalN;
 
-    // Imprimimos cabecera final (N_GEN pasa a 0 en la salida, como en el ejemplo)
-    cout << GEN_PROC_RABBITS << ' '
-         << GEN_PROC_FOXES << ' '
-         << GEN_FOOD_FOXES << ' '
+    cout << genProcRabbits << ' '
+         << genProcFoxes << ' '
+         << genFoodFoxes << ' '
          << 0 << ' '
          << R << ' '
          << C << ' '
          << finalN << "\n";
 
-    // Imprimimos objetos finales en el formato pedido
-    for (int x = 0; x < R; ++x) {
-        for (int y = 0; y < C; ++y) {
-            int idx = x * C + y;
-            if (world[idx].type == ROCK) {
+    for (int x = 0; x < R; ++x)
+    {
+        for (int y = 0; y < C; ++y)
+        {
+            int id = idxPos(x, y);
+            if (tipo[id] == ROCK)
                 cout << "ROCK " << x << ' ' << y << "\n";
-            } else if (world[idx].type == RABBIT) {
+            if (tipo[id] == RABBIT)
                 cout << "RABBIT " << x << ' ' << y << "\n";
-            } else if (world[idx].type == FOX) {
+            if (tipo[id] == FOX)
                 cout << "FOX " << x << ' ' << y << "\n";
-            }
         }
     }
+}
 
+int main()
+{
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    leerEntrada();
+
+    for (int g = 0; g < nGen; ++g)
+    {
+        faseConejos(g);
+        faseZorros(g);
+        tipo.swap(tipoNext);
+        repro.swap(reproNext);
+        hambre.swap(hambreNext);
+    }
+
+    imprimirResultado();
     return 0;
 }
